@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quadruped Control Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0a0a0a; --surface: #111; --border: #1e1e1e; --text: #ccc;
+    --dim: #555; --lqg: #22c55e; --mpc: #3b82f6; --pmp: #ef4444;
+    --warn: #fbbf24; --accent: var(--lqg);
+  }
+  body { background: var(--bg); color: var(--text); font-family: 'JetBrains Mono', monospace; overflow-x: hidden; }
+
+  /* header */
+  .hdr { padding: 10px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .hdr-left { display: flex; align-items: center; gap: 10px; }
+  .hdr-left .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); transition: all .3s; }
+  .hdr-left h1 { font-size: 13px; font-weight: 600; letter-spacing: 0.5px; }
+  .hdr .tag { font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+  .hdr .time { font-size: 10px; color: var(--dim); }
+  .conn { font-size: 10px; padding: 2px 8px; border-radius: 4px; }
+  .conn.ok { background: #22c55e22; color: #22c55e; }
+  .conn.fail { background: #ef444422; color: #ef4444; }
+
+  /* toolbar */
+  .toolbar { padding: 8px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .btn-group { display: flex; gap: 3px; }
+  .btn { background: #1a1a1a; color: #777; border: 1px solid #333; padding: 4px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .15s; }
+  .btn:hover { border-color: #555; color: #bbb; }
+  .btn.active { border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+  .btn.sm { font-size: 10px; padding: 4px 10px; }
+  .sep { width: 1px; height: 20px; background: var(--border); }
+
+  /* main layout */
+  .main { display: flex; flex-wrap: wrap; }
+  .canvas-wrap { flex: 1 1 480px; position: relative; }
+  canvas { display: block; width: 100%; max-width: 620px; margin: 0 auto; }
+  .key-hints { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%); display: flex; gap: 5px; font-size: 9px; color: var(--dim); }
+  .key-hints span { background: #141414; padding: 2px 6px; border-radius: 3px; border: 1px solid #272727; }
+
+  /* telemetry */
+  .telem { flex: 0 0 300px; border-left: 1px solid var(--border); padding: 14px 18px; font-size: 11px; }
+  .section-label { font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; margin-top: 14px; }
+  .section-label:first-child { margin-top: 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; }
+  .grid2 .k { color: #666; }
+  .grid2 .v { text-align: right; }
+  .spark-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+  .spark-row .lbl { width: 55px; text-align: right; font-size: 10px; color: #666; }
+  .spark-row .val { width: 48px; font-size: 10px; }
+  .info-box { margin-top: 14px; padding: 8px 10px; background: #0e0e0e; border-radius: 6px; border: 1px solid #1a1a1a; font-size: 9px; color: #555; line-height: 1.5; }
+  .info-box b { color: var(--accent); font-weight: 600; }
+
+  /* disturbance overlay */
+  .dist-overlay { position: absolute; top: 8px; left: 12px; font-size: 12px; font-weight: 700; color: #ef4444; display: none; }
+  .dist-overlay.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <div class="hdr-left">
+    <div class="dot" id="dot"></div>
+    <h1>QUADRUPED SRB CONTROL</h1>
+    <span class="tag" id="ctrlTag" style="background:var(--accent)22;color:var(--accent)">LQG</span>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span class="conn fail" id="connBadge">disconnected</span>
+    <span class="time" id="clock">t = 0.0s</span>
+  </div>
+</div>
+
+<div class="toolbar" id="toolbar">
+  <div class="btn-group" id="ctrlBtns">
+    <button class="btn active" data-ctrl="lqg">LQG</button>
+    <button class="btn" data-ctrl="mpc">MPC</button>
+    <button class="btn" data-ctrl="pmp">PMP</button>
+  </div>
+  <div class="sep"></div>
+  <div class="btn-group" id="distBtns">
+    <button class="btn sm active" data-dist="none">No Dist.</button>
+    <button class="btn sm" data-dist="impulse">Impulse</button>
+    <button class="btn sm" data-dist="persistent">Persistent</button>
+  </div>
+  <div class="sep"></div>
+  <button class="btn sm" id="resetBtn">Reset</button>
+</div>
+
+<div class="main">
+  <div class="canvas-wrap">
+    <canvas id="cv" width="620" height="370"></canvas>
+    <div class="dist-overlay" id="distOverlay">⚡ DISTURBANCE</div>
+    <div class="key-hints">
+      <span>↑↓ fwd/bwd</span><span>←→ yaw</span><span>Z/C lateral</span><span>Space stop</span>
+    </div>
+  </div>
+  <div class="telem">
+    <div class="section-label">State</div>
+    <div class="grid2">
+      <span class="k">vx</span><span class="v" id="sv_vx">0.000</span>
+      <span class="k">vy</span><span class="v" id="sv_vy">0.000</span>
+      <span class="k">ωz</span><span class="v" id="sv_wz">0.000</span>
+      <span class="k">height</span><span class="v" id="sv_h">0.225</span>
+      <span class="k">roll</span><span class="v" id="sv_roll">0.00°</span>
+      <span class="k">pitch</span><span class="v" id="sv_pitch">0.00°</span>
+      <span class="k">‖e_pos‖</span><span class="v" id="sv_pe">0.000</span>
+      <span class="k">‖GRF‖</span><span class="v" id="sv_grf">0.0 N</span>
+    </div>
+
+    <div class="section-label">Command</div>
+    <div class="grid2">
+      <span class="k">cmd_vx</span><span class="v" id="cv_vx" style="color:var(--warn)">0.00</span>
+      <span class="k">cmd_vy</span><span class="v" id="cv_vy" style="color:var(--warn)">0.00</span>
+      <span class="k">cmd_ωz</span><span class="v" id="cv_wz" style="color:var(--warn)">0.00</span>
+    </div>
+
+    <div class="section-label">History</div>
+    <div id="sparklines"></div>
+
+    <div class="info-box" id="infoBox">
+      <b>LQG</b> — Linear-Quadratic Gaussian. Kalman-filtered state estimate with LQR feedback.
+    </div>
+  </div>
+</div>
+
+<script>
+// ── WebSocket ──
+const WS_URL = "ws://localhost:8765";
+let ws = null, connected = false;
+let lastFrame = null;
+
+function connectWS() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    connected = true;
+    document.getElementById("connBadge").className = "conn ok";
+    document.getElementById("connBadge").textContent = "connected";
+  };
+  ws.onclose = () => {
+    connected = false;
+    document.getElementById("connBadge").className = "conn fail";
+    document.getElementById("connBadge").textContent = "disconnected";
+    setTimeout(connectWS, 2000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (e) => { lastFrame = JSON.parse(e.data); };
+}
+connectWS();
+
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+// ── Teleop state ──
+const cmd = { vx: 0, vy: 0, wz: 0 };
+const keys = new Set();
+const STEP = 0.05, ANG = 0.15;
+
+document.addEventListener("keydown", (e) => {
+  if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) e.preventDefault();
+  keys.add(e.key);
+});
+document.addEventListener("keyup", (e) => keys.delete(e.key));
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function processKeys() {
+  if (keys.has("ArrowUp")) cmd.vx = clamp(cmd.vx + STEP*0.3, -0.8, 0.8);
+  else if (keys.has("ArrowDown")) cmd.vx = clamp(cmd.vx - STEP*0.3, -0.8, 0.8);
+  else cmd.vx *= 0.92;
+
+  if (keys.has("ArrowLeft")) cmd.wz = clamp(cmd.wz + ANG*0.2, -1.5, 1.5);
+  else if (keys.has("ArrowRight")) cmd.wz = clamp(cmd.wz - ANG*0.2, -1.5, 1.5);
+  else cmd.wz *= 0.9;
+
+  if (keys.has("z")) cmd.vy = clamp(cmd.vy + STEP*0.3, -0.5, 0.5);
+  else if (keys.has("c")) cmd.vy = clamp(cmd.vy - STEP*0.3, -0.5, 0.5);
+  else cmd.vy *= 0.92;
+
+  if (keys.has(" ")) { cmd.vx = 0; cmd.vy = 0; cmd.wz = 0; }
+
+  send({ vx: +cmd.vx.toFixed(3), vy: +cmd.vy.toFixed(3), wz: +cmd.wz.toFixed(3) });
+}
+
+// ── Toolbar ──
+let activeCtrl = "lqg", activeDist = "none";
+const COLORS = { lqg: "#22c55e", mpc: "#3b82f6", pmp: "#ef4444" };
+const LABELS = { lqg: "LQG", mpc: "MPC", pmp: "PMP" };
+const DESCS = {
+  lqg: "<b>LQG</b> — Linear-Quadratic Gaussian. Kalman-filtered state estimate with LQR feedback. Balanced performance.",
+  mpc: "<b>MPC</b> — Model Predictive Control. Receding-horizon optimization with friction cone constraints. Most aggressive.",
+  pmp: "<b>PMP</b> — Pontryagin Minimum Principle. Costate-based optimal control via Hamiltonian sweep. Smoothest response.",
+};
+
+function setAccent(c) { document.documentElement.style.setProperty("--accent", COLORS[c]); }
+
+document.querySelectorAll("[data-ctrl]").forEach(b => b.addEventListener("click", () => {
+  activeCtrl = b.dataset.ctrl;
+  document.querySelectorAll("[data-ctrl]").forEach(x => x.classList.toggle("active", x === b));
+  setAccent(activeCtrl);
+  document.getElementById("ctrlTag").textContent = LABELS[activeCtrl];
+  document.getElementById("ctrlTag").style.color = COLORS[activeCtrl];
+  document.getElementById("infoBox").innerHTML = DESCS[activeCtrl];
+  send({ controller: activeCtrl });
+}));
+
+document.querySelectorAll("[data-dist]").forEach(b => b.addEventListener("click", () => {
+  activeDist = b.dataset.dist;
+  document.querySelectorAll("[data-dist]").forEach(x => x.classList.toggle("active", x === b));
+  send({ disturbance: activeDist });
+}));
+
+document.getElementById("resetBtn").addEventListener("click", () => send({ reset: true }));
+
+// ── Drawing ──
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const HIP_H = 0.225;
+
+const FEET = [[.19,.111],[.19,-.111],[-.19,.111],[-.19,-.111]];
+const BODY = [[-.22,-.12],[.22,-.12],[.22,.12],[-.22,.12]];
+
+function drawQuadruped(x, t) {
+  if (!x || x.length < 12) return;
+  const W = cv.width, H = cv.height;
+  const [px,py,pz, vx,vy,vz, roll,pitch,yaw] = x;
+  const speed = Math.sqrt(vx*vx + vy*vy);
+  const cx = W/2, cy = H*0.55, sc = 280;
+  const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
+  const rot = (bx,by) => [bx*cosY - by*sinY, bx*sinY + by*cosY];
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = "rgba(120,120,120,0.12)";
+  ctx.lineWidth = 1;
+  const gs = 0.3;
+  for (let i = -6; i <= 6; i++) {
+    const gx = i*gs - (px % gs);
+    ctx.beginPath(); ctx.moveTo(cx + gx*sc, 0); ctx.lineTo(cx + gx*sc, H); ctx.stroke();
+    const gy = i*gs - (py % gs);
+    ctx.beginPath(); ctx.moveTo(0, cy + gy*sc*0.5); ctx.lineTo(W, cy + gy*sc*0.5); ctx.stroke();
+  }
+
+  const hOff = (pz - HIP_H) * sc * 0.8;
+
+  // Shadow
+  ctx.fillStyle = "rgba(0,0,0,0.07)";
+  ctx.beginPath();
+  const sh = BODY.map(([bx,by]) => rot(bx*1.3, by*1.3));
+  ctx.moveTo(cx+sh[0][0]*sc, cy+sh[0][1]*sc*0.5+14);
+  sh.slice(1).forEach(([sx,sy]) => ctx.lineTo(cx+sx*sc, cy+sy*sc*0.5+14));
+  ctx.closePath(); ctx.fill();
+
+  // Legs
+  const gaitOff = [0, 0.5, 0.5, 0];
+  for (let i = 0; i < 4; i++) {
+    const phase = ((t + gaitOff[i]*0.5) % 0.5) / 0.5;
+    const swing = speed < 0.02 ? 0 : (phase < 0.5 ? Math.sin(phase*2*Math.PI) : 0) * Math.min(1, speed*3) * 12;
+    const [fx,fy] = rot(FEET[i][0], FEET[i][1]);
+    const lx = cx + fx*sc, ly = cy + fy*sc*0.5 - hOff + 30 - swing;
+
+    // hip connection
+    const hipIdx = [3,2,0,1][i];
+    const [hx2,hy2] = rot(BODY[hipIdx][0], BODY[hipIdx][1]);
+    ctx.strokeStyle = "rgba(160,160,160,0.5)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx+hx2*sc, cy+hy2*sc*0.5 - hOff);
+    ctx.lineTo(lx, ly);
+    ctx.stroke();
+
+    ctx.fillStyle = swing > 1 ? "#fbbf24" : "#777";
+    ctx.beginPath(); ctx.arc(lx, ly, 5, 0, Math.PI*2); ctx.fill();
+  }
+
+  // Body
+  const rPts = BODY.map(([bx,by]) => { const [rx,ry] = rot(bx,by); return [cx+rx*sc, cy+ry*sc*0.5-hOff]; });
+  ctx.fillStyle = "rgba(25,25,25,0.9)";
+  ctx.strokeStyle = "rgba(255,255,255,0.15)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(rPts[0][0], rPts[0][1]);
+  rPts.slice(1).forEach(([x,y]) => ctx.lineTo(x,y));
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+
+  // Head
+  const hd = rot(0.28, 0);
+  ctx.fillStyle = COLORS[activeCtrl];
+  ctx.beginPath(); ctx.arc(cx+hd[0]*sc, cy+hd[1]*sc*0.5-hOff, 7, 0, Math.PI*2); ctx.fill();
+
+  // Velocity arrow
+  if (speed > 0.01) {
+    const len = Math.min(speed*80, 60);
+    const a = Math.atan2(vy, vx);
+    ctx.strokeStyle = "rgba(59,130,246,0.6)"; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(cx, cy-hOff);
+    ctx.lineTo(cx+Math.cos(a)*len, cy+Math.sin(a)*len*0.5-hOff); ctx.stroke();
+  }
+}
+
+// ── Sparklines ──
+function drawSpark(parent, data, color, label) {
+  if (!data || data.length < 2) return;
+  const w = 120, h = 26;
+  const max = Math.max(...data, 0.001), min = Math.min(...data, 0);
+  const range = max - min || 1;
+  const pts = data.map((v,i) => `${(i/(data.length-1))*w},${h-((v-min)/range)*h}`).join(" ");
+
+  const row = document.createElement("div");
+  row.className = "spark-row";
+  row.innerHTML = `<span class="lbl">${label}</span>
+    <svg width="${w}" height="${h}" style="overflow:visible"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>
+    <span class="val" style="color:${color}">${data[data.length-1].toFixed(2)}</span>`;
+  parent.appendChild(row);
+}
+
+// ── Main loop ──
+function loop() {
+  processKeys();
+
+  const f = lastFrame;
+  if (f) {
+    drawQuadruped(f.x, f.t);
+
+    // Disturbance overlay
+    const distNorm = f.dist ? f.dist.reduce((s,v)=>s+v*v, 0) : 0;
+    const ov = document.getElementById("distOverlay");
+    ov.classList.toggle("show", distNorm > 0);
+    if (distNorm > 0) {
+      ctx.fillStyle = "rgba(239,68,68,0.06)";
+      ctx.fillRect(0, 0, cv.width, cv.height);
+    }
+
+    document.getElementById("clock").textContent = `t = ${f.t.toFixed(1)}s`;
+    document.getElementById("sv_vx").textContent = f.x[3].toFixed(3) + " m/s";
+    document.getElementById("sv_vy").textContent = f.x[4].toFixed(3) + " m/s";
+    document.getElementById("sv_wz").textContent = f.x[11].toFixed(3) + " rad/s";
+    document.getElementById("sv_h").textContent = f.x[2].toFixed(3) + " m";
+    document.getElementById("sv_roll").textContent = (f.x[6]*57.3).toFixed(2) + "°";
+    document.getElementById("sv_pitch").textContent = (f.x[7]*57.3).toFixed(2) + "°";
+    document.getElementById("sv_pe").textContent = f.pos_err.toFixed(4);
+    document.getElementById("sv_grf").textContent = f.grf_norm.toFixed(1) + " N";
+
+    document.getElementById("cv_vx").textContent = f.cmd[0].toFixed(2);
+    document.getElementById("cv_vy").textContent = f.cmd[1].toFixed(2);
+    document.getElementById("cv_wz").textContent = f.cmd[2].toFixed(2);
+
+    // Sparklines
+    const sp = document.getElementById("sparklines");
+    sp.innerHTML = "";
+    drawSpark(sp, f.hist_pos, COLORS[activeCtrl], "pos err");
+    drawSpark(sp, f.hist_vel, "#fbbf24", "vel err");
+    drawSpark(sp, f.hist_grf, "#6366f1", "‖GRF‖");
+  }
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
